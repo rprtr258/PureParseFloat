@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include "..\pure_parse_float\pure_parse_float.h"
+#include "../pure_parse_float/pure_parse_float.h"
 
 uint32_t test_rand_seed = 0;
 

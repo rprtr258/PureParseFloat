@@ -29,6 +29,7 @@ impl Reader {
 }
 
 // 31 digits garantee, with (exp^10 >= -291) or (exp^2 >= -968)
+#[derive(Debug)]
 struct DoubleDouble {
     hi: f64,
     lo: f64,
@@ -141,6 +142,7 @@ impl DoubleDouble {
 // ---
 
 const FIXED_DECIMAL_DIGITS: usize = 17 * 2;
+#[derive(Debug)]
 struct FixedDecimal {
     count: isize,
     exponent: isize,
@@ -148,7 +150,7 @@ struct FixedDecimal {
     digits: [u8; FIXED_DECIMAL_DIGITS], // Max digits in Double value * 2
 }
 
-impl Into<f64> for &FixedDecimal {
+impl Into<f64> for FixedDecimal {
     fn into(self) -> f64 {
         const LAST_ACCURACY_EXPONENT_10: isize = 22; // for Double
         const LAST_ACCURACY_POWER_10: f64 = 1e22; // for Double
@@ -180,7 +182,9 @@ impl Into<f64> for &FixedDecimal {
                 }
                 exponent -= LAST_ACCURACY_EXPONENT_10;
             }
-            number *= POWER_OF_10[exponent as usize]; // * eX
+            if exponent < LAST_ACCURACY_EXPONENT_10 {
+                number *= POWER_OF_10[exponent as usize]; // * eX
+            }
         }
         _ if exponent < 0 => {
             while exponent < -LAST_ACCURACY_EXPONENT_10 {
@@ -191,7 +195,9 @@ impl Into<f64> for &FixedDecimal {
                 }
                 exponent += LAST_ACCURACY_EXPONENT_10;
             }
-            number /= POWER_OF_10[-exponent as usize]; // / eX
+            if exponent > -LAST_ACCURACY_EXPONENT_10 {
+                number /= POWER_OF_10[-exponent as usize]; // / eX
+            }
         }
         _ => {}
         }
@@ -373,7 +379,7 @@ fn parse_float_impl(text: Reader) -> Option<(f64, usize)> {
     if let res@Some(_) = read_inf_or_nan(text.clone()) {
         return res
     } else if let Some((decimal, count)) = read_fixed_decimal(text) {
-        Some(((&decimal).into(), count))
+        Some((decimal.into(), count))
     } else {
         None
     }
@@ -395,33 +401,96 @@ unsafe extern fn parse_float(text: *const c_char, value: *mut c_double, text_end
 mod tests {
     use crate::{parse_float_impl, Reader};
 
-    #[test]
-    fn pi() {
-        let (result, _) = parse_float_impl(Reader::from_str("3.14159265")).unwrap();
-        assert_eq!(result, 3.14159265);
+    fn assert_example(s: &str) {
+        let expected = s.parse::<f64>().unwrap();
+        let (actual, _) = parse_float_impl(Reader::from_str(s)).unwrap();
+        if expected.is_nan() {
+            assert!(actual.is_nan());
+        } else {
+            assert_eq!(actual, expected, "s is {:?}", s);
+        }
     }
 
     #[test]
-    fn exponent() {
-        let (result, _) = parse_float_impl(Reader::from_str("-1234e10")).unwrap();
-        assert_eq!(result, -1234e10);
+    fn test_examples() {
+        assert_example("3.14159265");
+        assert_example("-1234e10");
+        assert_example("nan");
+        assert_example("-nan");
+        assert_example("-NaN");
+        assert_example("-1316044251e-371");
     }
 
     #[test]
-    fn nan() {
-        let (result, _) = parse_float_impl(Reader::from_str("nan")).unwrap();
-        assert!(f64::is_nan(result));
+    fn test_simple_integer() {
+        assert_example("0");
+        assert_example("666999");
+        assert_example("+12345");
+        assert_example("100000000000000001");
+        assert_example("-329");
+        assert_example("00000000000004");
+        assert_example("-00000000000009");
+        assert_example("+00000000000009");
     }
 
     #[test]
-    fn minus_nan() {
-        let (result, _) = parse_float_impl(Reader::from_str("-nan")).unwrap();
-        assert!(f64::is_nan(result));
+    fn test_simple_float() {
+        assert_example("0.0");
+        assert_example("10.2");
+        assert_example("-1.2");
+        assert_example("0.2");
     }
 
     #[test]
-    fn minus_nan_uppercase() {
-        let (result, _) = parse_float_impl(Reader::from_str("-NaN")).unwrap();
-        assert!(f64::is_nan(result));
+    fn test_simple_exponent() {
+        assert_example("0.0e0");
+        assert_example("10.2e10");
+        assert_example("-1.2e99");
+        assert_example("0.2e-12");
+    }
+
+    #[test]
+    fn test_special_string() {
+        assert_example("Nan");
+        assert_example("Inf");
+        assert_example("+Inf");
+        assert_example("-Inf");
+        assert_example("+Infinity");
+        assert_example("-Infinity");
+        assert_example("+Nan");
+        assert_example("-Nan");
+    }
+
+    #[test]
+    fn test_hard_parse() {
+        assert_example(".e1");// not a number
+        assert_example("1.e1");
+        assert_example(".1");
+        assert_example(".1e000000000010");
+        assert_example("-.1e-000000000010");
+        assert_example("1.");
+        assert_example("2e.10");
+        assert_example("-0.00e-214");
+        assert_example("0e320");
+        assert_example(".123e10");
+        // assert_example("123" + DupeString("0", 10000) + "e-10000");// 123.0
+        // assert_example("1234567891234567891234567891234" + DupeString("0", 10000) + "e-10000");// 1234567891234567891234567891234.0
+        // assert_example("-0." + DupeString("0", 10000) + "9e10000");// -0.9
+        // special values
+        assert_example("6.69692879491417e+299");
+        assert_example("3.7252902984619140625e-09");
+        assert_example("1.1754943508222875080e-38");
+        assert_example("1.4012984643248170709e-45");
+        assert_example("340282346638528859811704183484516925440.0");
+        assert_example("2.2250738585072013831e-308");
+        assert_example("4.9406564584124654418e-324");
+        assert_example("1.7976931348623157081e+308");
+        assert_example("1.8145860519450699870567321328132e-5");
+        assert_example("0.34657359027997265470861606072909");
+        // inf
+        assert_example("1000000000000e307");// +inf
+        assert_example("-1000000000000e307");// -inf
+        // demo values
+        assert_example("18014398509481993");
     }
 }
